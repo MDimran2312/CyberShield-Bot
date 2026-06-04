@@ -1,16 +1,17 @@
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import os
 import hashlib
 import sqlite3
 import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-API_TOKEN = 'YOUR_BOT_TOKEN_HERE'
+# ---- ⚙️ বোট কনফিগারেশন ----
+API_TOKEN = 'YOUR_BOT_TOKEN_HERE'  # এখানে আপনার আসল বোট টোকেনটি বসান
+MAIN_ADMIN_ID = 8273597769        # আপনার মেইন অ্যাডমিন আইডি
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
-
-# ---- 👑 প্রধান অ্যাডমিন আইডি ----
-MAIN_ADMIN_ID = 8273597769 
 
 # ---- ৩টি অফিশিয়াল চ্যানেলের কনফিগারেশন ----
 OFFICIAL_CHANNELS = [
@@ -19,8 +20,10 @@ OFFICIAL_CHANNELS = [
     {"id": "-1003928674058", "title": "📢 অফিশিয়াল চ্যানেল ৩", "link": "https://t.me/Cyber_Shield_official"}
 ]
 
-# ---- ডাটাবেজ সেটআপ ----
-conn = sqlite3.connect('group_security.db')
+# ---- ডাটাবেজ সেটআপ (Railway Persistent Path) ----
+# রেলওয়েতে ফাইল রিস্টার্ট এড়াতে /tmp/ বা ডিরেক্ট কারেন্ট ডিরেক্টরি পাথ নিশ্চিত করা
+DB_PATH = os.path.join(os.path.dirname(__file__), 'group_security.db')
+conn = sqlite3.connect(DB_PATH)
 cursor = conn.cursor()
 cursor.execute('''CREATE TABLE IF NOT EXISTS msg_history (hash TEXT PRIMARY KEY)''')
 cursor.execute('''CREATE TABLE IF NOT EXISTS bot_users (user_id INTEGER PRIMARY KEY)''')
@@ -44,21 +47,19 @@ async def check_user_joined(user_id):
             if member.status in ['left', 'kicked']:
                 not_joined.append(ch)
         except Exception:
+            # চ্যানেল থেকে রেসপন্স না পেলে বা বোট অ্যাডমিন না থাকলে স্কিপ করবে
             continue
     return not_joined
 
 # ---- 🎛️ ১. অ্যাডমিন প্যানেল কমান্ড (/admin) ----
 @dp.message_handler(commands=['admin'])
 async def admin_panel(message: types.Message):
-    # শুধু আপনি ছাড়া অন্য কেউ এই প্যানেল দেখতে পারবে না
     if message.from_user.id != MAIN_ADMIN_ID:
         return
 
-    # ডাটাবেজ থেকে মোট ইউজার সংখ্যা বের করা
     cursor.execute("SELECT COUNT(*) FROM bot_users")
     total_users = cursor.fetchone()[0]
 
-    # অ্যাডমিন প্যানেলের ইনলাইন বাটন
     admin_keyboard = InlineKeyboardMarkup(row_width=1)
     admin_keyboard.add(
         InlineKeyboardButton(text="📊 বোটের তথ্য (Stats)", callback_data="admin_stats"),
@@ -182,6 +183,10 @@ async def secure_group(message: types.Message):
     if message.chat.type == 'private':
         return
 
+    # কমান্ড বা বোটের নিজস্ব মেসেজ ফিল্টার করা (যাতে এগুলো কপি-পেস্ট ডাটাবেজে না যায়)
+    if message.text and (message.text.startswith('/') or message.from_user.is_bot):
+        return
+
     if await is_admin(message.chat.id, message.from_user.id):
         if message.text:
             cursor.execute("INSERT OR IGNORE INTO msg_history VALUES (?)", (get_hash(message.text),))
@@ -191,24 +196,33 @@ async def secure_group(message: types.Message):
     # ফোর্স জয়েন চেক
     not_joined = await check_user_joined(message.from_user.id)
     if not_joined:
-        await message.delete()
-        keyboard = InlineKeyboardMarkup(row_width=1)
-        for ch in not_joined:
-            keyboard.add(InlineKeyboardButton(text=ch["title"], url=ch["link"]))
-        await message.answer(f"⚠️ @{message.from_user.username}, মেসেজ দিতে অফিশিয়াল চ্যানেলগুলোতে জয়েন করুন!", reply_markup=keyboard)
+        try:
+            await message.delete()
+            keyboard = InlineKeyboardMarkup(row_width=1)
+            for ch in not_joined:
+                keyboard.add(InlineKeyboardButton(text=ch["title"], url=ch["link"]))
+            await message.answer(f"⚠️ @{message.from_user.username}, গ্রুপে মেসেজ দিতে আমাদের অফিশিয়াল চ্যানেলগুলোতে জয়েন করুন!", reply_markup=keyboard)
+        except Exception:
+            pass
         return
 
     # ফরওয়ার্ড ফিল্টার
     if message.forward_from_chat:
         if message.forward_from_chat.username:
-            await message.delete()
-            await message.answer(f"❌ @{message.from_user.username}, পাবলিক পোস্ট ফরওয়ার্ড করা নিষেধ!")
+            try:
+                await message.delete()
+                await message.answer(f"❌ @{message.from_user.username}, পাবলিক চ্যানেল বা গ্রুপ থেকে পোস্ট ফরওয়ার্ড করা নিষেধ!")
+            except Exception:
+                pass
             return
 
     # লিংক ও ইউজারনেম ফিল্টার
     if message.text:
         if "t.me/" in message.text or "@" in message.text:
-            await message.delete()
+            try:
+                await message.delete()
+            except Exception:
+                pass
             return
 
         # কপি-পেস্ট অ্যান্ড ব্যান সেটিং
@@ -216,9 +230,8 @@ async def secure_group(message: types.Message):
         cursor.execute("SELECT hash FROM msg_history WHERE hash=?", (text_hash,))
         
         if cursor.fetchone():
-            await message.delete()
-            
             try:
+                await message.delete()
                 await bot.kick_chat_member(chat_id=message.chat.id, user_id=message.from_user.id)
                 
                 warning_text = (
@@ -230,9 +243,9 @@ async def secure_group(message: types.Message):
                 )
                 await message.answer(warning_text, parse_mode="Markdown")
             except Exception as e:
-                print(f"ব্যান করতে সমস্যা হয়েছে: {e}")
+                print(f"ব্যান বা মেসেজ ডিলিট করতে সমস্যা হয়েছে: {e}")
         else:
-            cursor.execute("INSERT INTO msg_history VALUES (?)", (text_hash,))
+            cursor.execute("INSERT OR IGNORE INTO msg_history VALUES (?)", (text_hash,))
             conn.commit()
 
 if __name__ == '__main__':
