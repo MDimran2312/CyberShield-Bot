@@ -7,7 +7,7 @@ from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ---- ⚙️ বোট কনফিগারেশন ----
-API_TOKEN = 'YOUR_BOT_TOKEN_HERE'  # এখানে আপনার আসল বোট টোকেনটি বসান
+API_TOKEN = '8709224461:AAEiDd1tQ20ql0teegS0WTR_MWeJymNJDDQ'  # এখানে আপনার আসল বোট টোকেনটি বসান
 MAIN_ADMIN_ID = 8273597769        # আপনার মেইন অ্যাডমিন আইডি
 
 bot = Bot(token=API_TOKEN)
