@@ -43,32 +43,33 @@ async def check_user_joined(user_id):
     for ch in OFFICIAL_CHANNELS:
         try:
             member = await bot.get_chat_member(ch["id"], user_id)
-            if member.status in ['left', 'kicked']:
+            if member.status not in ['member', 'administrator', 'creator']:
                 not_joined.append(ch)
         except Exception:
             not_joined.append(ch)
     return not_joined
 
-# ---- 🤝 নতুন গ্রুপে অ্যাড হওয়া এবং অ্যাডমিন ভেরিফিকেশন নোটিশ ----
+# ---- 🤝 গ্রুপে অটো-অ্যাডমিন হওয়ার সাথে সাথে সাকসেস মেসেজ লজিক ----
 @dp.my_chat_member_handler()
 async def bot_admin_check(update: types.ChatMemberUpdated):
-    if update.new_chat_member.status in ['administrator']:
-        if update.old_chat_member.status not in ['administrator']:
-            chat_id = update.chat.id
-            keyboard = InlineKeyboardMarkup(row_width=1)
-            for ch in OFFICIAL_CHANNELS:
-                keyboard.add(InlineKeyboardButton(text=ch["title"], url=ch["link"]))
-            
-            success_text = (
-                f"🎉 **অভিনন্দন! বোটটি সফলভাবে অ্যাডমিন হিসেবে যুক্ত হয়েছে।** 🎉\n\n"
-                f"🛡️ **গ্রুপের নাম:** {update.chat.title}\n"
-                f"⚙️ **স্ট্যাটাস:** `SUCCESSFUL / ACTIVE`\n\n"
-                f"এখন থেকে এই গ্রুপের সমস্ত সিকিউরিটি (লিংক কিলার, পাবলিক ফরওয়ার্ড প্রোটেকশন, এবং স্মার্ট কপি-পেস্ট অ্যান্টি-ব্যান) পুরোদমে সচল করা হলো!"
-            )
-            try:
-                await bot.send_message(chat_id=chat_id, text=success_text, reply_markup=keyboard, parse_mode="Markdown")
-            except Exception:
-                pass
+    # বোট গ্রুপে অ্যাডমিন হিসেবে যুক্ত হলে বা ওল্ড স্ট্যাটাস মেম্বার থেকে অ্যাডমিন হলে
+    if update.new_chat_member.status == 'administrator':
+        chat_id = update.chat.id
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        for ch in OFFICIAL_CHANNELS:
+            keyboard.add(InlineKeyboardButton(text=ch["title"], url=ch["link"]))
+        
+        success_text = (
+            f"🎉 ** can't believe it! বোটটি সফলভাবে অ্যাডমিন হিসেবে যুক্ত হয়েছে।** 🎉\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🛡️ **গ্রুপের নাম:** {update.chat.title}\n"
+            f"⚙️ **স্ট্যাটাস:** `SUCCESSFUL / ACTIVE` ✅\n\n"
+            f"এখন থেকে এই গ্রুপের সমস্ত সিকিউরিটি (লিংক কিলার, পাবলিক ফরওয়ার্ড প্রোটেকশন, এবং স্মার্ট কপি-পেস্ট অ্যান্টি-ব্যান) পুরোদমে সচল করা হলো!"
+        )
+        try:
+            await bot.send_message(chat_id=chat_id, text=success_text, reply_markup=keyboard, parse_mode="Markdown")
+        except Exception as e:
+            print(f"সাকসেস মেসেজ পাঠাতে সমস্যা: {e}")
 
 # ---- 🎛️ ১. অ্যাডমিন প্যানেল কমান্ড (/admin) ----
 @dp.message_handler(commands=['admin'])
@@ -128,10 +129,10 @@ async def start_command(message: types.Message):
         keyboard.add(InlineKeyboardButton(text=ch["title"], url=ch["link"]))
     
     keyboard.add(InlineKeyboardButton(text="✅ জয়েন করেছি (Verify)", callback_data="verify_user"))
-    add_to_group_url = f"https://t.me/{bot_user.username}?startgroup=true"
-    keyboard.add(InlineKeyboardButton(text="➕ বোটটি আপনার গ্রুপে অ্যাড করুন", url=add_to_group_url))
+    
+    add_to_group_url = f"https://t.me/{bot_user.username}?startgroup=true&admin=change_info+delete_messages+restrict_members+invite_users+pin_messages+manage_video_chats"
+    keyboard.add(InlineKeyboardButton(text="➕ বোটটি সরাসরি আপনার গ্রুপে অ্যাডমিন করুন", url=add_to_group_url))
 
-    # ইউজারদের সহজে বোঝানোর জন্য সুন্দর করে সাজানো গাইডলাইন মেসেজ
     welcome_text = (
         f"👋 **হ্যালো {message.from_user.first_name}!**\n\n"
         f"🛡️ এটি একটি অত্যন্ত উন্নত **টেলিগ্রাম গ্রুপ সিকিউরিটি বোট**। এটি আপনার গ্রুপকে স্প্যামার এবং চোরদের হাত থেকে ১০০% সুরক্ষিত রাখবে।\n\n"
@@ -145,11 +146,12 @@ async def start_command(message: types.Message):
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"১. প্রথমে নিচে দেওয়া আমাদের অফিশিয়াল চ্যানেলগুলোতে জয়েন করুন।\n"
         f"২. জয়েন শেষে **'✅ জয়েন করেছি (Verify)'** বাটনে ক্লিক করুন।\n"
-        f"৩. এরপর **'➕ বোটটি আপনার গ্রুপে অ্যাড করুন'** বাটনে ক্লিক করে গ্রুপে নিয়ে যান এবং বোটটিকে অবশ্যই **Admin** বানিয়ে সব পারমিশন দিয়ে দিন।\n\n"
-        f"⚠️ *চ্যানেলগুলোতে জয়েন না করলে ভেরিফিকেশন সফল হবে না।* "
+        f"৩. এরপর **'➕ বোটটি সরাসরি আপনার গ্রুপে অ্যাডমিন করুন'** বাটনে ক্লিক করে গ্রুপে নিয়ে যান। বোটটি সরাসরি স্বয়ংক্রিয়ভাবে ফুল অ্যাডমিন হিসেবে যুক্ত হবে।\n\n"
+        f"⚠️ *চ্যানেলগুলোতে জয়েন না করলে ভেরিফিকেশন সফল হবে না।*"
     )
     await message.reply(welcome_text, reply_markup=keyboard, parse_mode="Markdown")
 
+# ---- ৩. জয়েন ভেরিফিকেশন ----
 @dp.callback_query_handler(text="verify_user")
 async def verify_user_callback(call: types.CallbackQuery):
     not_joined = await check_user_joined(call.from_user.id)
@@ -160,14 +162,14 @@ async def verify_user_callback(call: types.CallbackQuery):
         await call.answer("✅ ভেরিফিকেশন সফল হয়েছে!", show_alert=True)
         bot_user = await bot.get_me()
         success_keyboard = InlineKeyboardMarkup(row_width=1)
-        add_to_group_url = f"https://t.me/{bot_user.username}?startgroup=true"
-        success_keyboard.add(InlineKeyboardButton(text="➕ বোটটি এখনই আপনার গ্রুপে অ্যাড করুন", url=add_to_group_url))
+        add_to_group_url = f"https://t.me/{bot_user.username}?startgroup=true&admin=change_info+delete_messages+restrict_members+invite_users+pin_messages+manage_video_chats"
+        success_keyboard.add(InlineKeyboardButton(text="➕ বোটটি এখনই আপনার গ্রুপে অ্যাডমিন করুন", url=add_to_group_url))
         
         await call.message.edit_text(
             "🎉 **অভিনন্দন! আপনার ভেরিফিকেশন সফল হয়েছে।**\n\n"
             "এই সিকিউরিটি বোটটি এখন আপনার নিজের গ্রুপের জন্য প্রস্তুত।\n"
-            "নিচে দেওয়া ইনলাইন বাটনে ক্লিক করে বোটটি এখনই আপনার গ্রুপে অ্যাড করে নিন এবং গ্রুপের সিকিউরিটি ১০০% মজবুত করুন!\n\n"
-            "*(নোট: গ্রুপে অ্যাড করার পর বোটটিকে অবশ্যই Admin বানিয়ে অল পারমিশন দিয়ে দেবেন।)*",
+            "নিচে দেওয়া ইনলাইন বাটনে ক্লিক করে বোটটি এখনই আপনার গ্রুপে অটো-অ্যাডমিন হিসেবে অ্যাড করে নিন!\n\n"
+            "*(নোট: বোটটি গ্রুপে অ্যাড করার সাথে সাথেই স্বয়ংক্রিয়ভাবে ফুল অ্যাডমিন পারমিশন পেয়ে যাবে।)*",
             reply_markup=success_keyboard,
             parse_mode="Markdown"
         )
@@ -286,4 +288,5 @@ async def secure_group(message: types.Message):
             conn.commit()
 
 if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+    # 🎯 মেইন ফিক্স: বোট যেন সব ধরনের চ্যাট মেম্বার আপডেট ব্যাকগ্রাউন্ডে চেক করতে পারে তা নিশ্চিত করা হলো
+    executor.start_polling(dp, skip_updates=True, allowed_updates=types.AllowedUpdates.all())
