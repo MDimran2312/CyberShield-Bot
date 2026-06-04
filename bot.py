@@ -1,13 +1,10 @@
 import os
 import hashlib
-import os
-import hashlib
 import sqlite3
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
 
 # ---- ⚙️ বোট কনফিগারেশন ----
 API_TOKEN = '8709224461:AAEiDd1tQ20ql0teegS0WTR_MWeJymNJDDQ'  # এখানে আপনার আসল বোট টোকেনটি বসান
@@ -23,10 +20,9 @@ OFFICIAL_CHANNELS = [
     {"id": "-1003928674058", "title": "📢 অফিশিয়াল চ্যানেল ৩", "link": "https://t.me/Cyber_Shield_official"}
 ]
 
-# ---- ডাটাবেজ সেটআপ (Railway Persistent Path) ----
-# রেলওয়েতে ফাইল রিস্টার্ট এড়াতে /tmp/ বা ডিরেক্ট কারেন্ট ডিরেক্টরি পাথ নিশ্চিত করা
+# ---- ডাটাবেজ সেটআপ ----
 DB_PATH = os.path.join(os.path.dirname(__file__), 'group_security.db')
-conn = sqlite3.connect(DB_PATH)
+conn = sqlite3.connect(DB_PATH, timeout=20)
 cursor = conn.cursor()
 cursor.execute('''CREATE TABLE IF NOT EXISTS msg_history (hash TEXT PRIMARY KEY)''')
 cursor.execute('''CREATE TABLE IF NOT EXISTS bot_users (user_id INTEGER PRIMARY KEY)''')
@@ -50,9 +46,29 @@ async def check_user_joined(user_id):
             if member.status in ['left', 'kicked']:
                 not_joined.append(ch)
         except Exception:
-            # চ্যানেল থেকে রেসপন্স না পেলে বা বোট অ্যাডমিন না থাকলে স্কিপ করবে
-            continue
+            not_joined.append(ch)
     return not_joined
+
+# ---- 🤝 নতুন গ্রুপে অ্যাড হওয়া এবং অ্যাডমিন ভেরিফিকেশন নোটিশ ----
+@dp.my_chat_member_handler()
+async def bot_admin_check(update: types.ChatMemberUpdated):
+    if update.new_chat_member.status in ['administrator']:
+        if update.old_chat_member.status not in ['administrator']:
+            chat_id = update.chat.id
+            keyboard = InlineKeyboardMarkup(row_width=1)
+            for ch in OFFICIAL_CHANNELS:
+                keyboard.add(InlineKeyboardButton(text=ch["title"], url=ch["link"]))
+            
+            success_text = (
+                f"🎉 **অভিনন্দন! বোটটি সফলভাবে অ্যাডমিন হিসেবে যুক্ত হয়েছে।** 🎉\n\n"
+                f"🛡️ **গ্রুপের নাম:** {update.chat.title}\n"
+                f"⚙️ **স্ট্যাটাস:** `SUCCESSFUL / ACTIVE`\n\n"
+                f"এখন থেকে এই গ্রুপের সমস্ত সিকিউরিটি (লিংক কিলার, পাবলিক ফরওয়ার্ড প্রোটেকশন, এবং স্মার্ট কপি-পেস্ট অ্যান্টি-ব্যান) পুরোদমে সচল করা হলো!"
+            )
+            try:
+                await bot.send_message(chat_id=chat_id, text=success_text, reply_markup=keyboard, parse_mode="Markdown")
+            except Exception:
+                pass
 
 # ---- 🎛️ ১. অ্যাডমিন প্যানেল কমান্ড (/admin) ----
 @dp.message_handler(commands=['admin'])
@@ -71,14 +87,13 @@ async def admin_panel(message: types.Message):
     )
 
     await message.reply(
-        f"👑 **স্বাগতম, মেইন অ্যাডমিন!**\n\n"
+        f"👑 **স্বাগতম, মেইন অ্যাডমিন ইমরান!**\n\n"
         f"📱 বোটের বর্তমান ইউজার সংখ্যা: `{total_users}` জন\n"
         f"নিচের বাটনগুলো ব্যবহার করে বোট কন্ট্রোল করুন।",
         reply_markup=admin_keyboard,
         parse_mode="Markdown"
     )
 
-# ---- অ্যাডমিন প্যানেল বাটন লজিক ----
 @dp.callback_query_handler(lambda call: call.data.startswith('admin_') or call.data == 'clear_history')
 async def admin_callback_handler(call: types.CallbackQuery):
     if call.from_user.id != MAIN_ADMIN_ID:
@@ -98,7 +113,7 @@ async def admin_callback_handler(call: types.CallbackQuery):
     elif call.data == "admin_broadcast_info":
         await call.answer("📢 ব্রডকাস্ট করতে চ্যাটে লিখুন: /broadcast আপনার মেসেজ", show_alert=True)
 
-# ---- ২. স্টার্ট কমান্ড ----
+# ---- ২. স্টার্ট কমান্ড (ইউজারদের জন্য সুন্দর কাজের বিবরণসহ) ----
 @dp.message_handler(commands=['start'])
 async def start_command(message: types.Message):
     user_id = message.from_user.id
@@ -116,15 +131,25 @@ async def start_command(message: types.Message):
     add_to_group_url = f"https://t.me/{bot_user.username}?startgroup=true"
     keyboard.add(InlineKeyboardButton(text="➕ বোটটি আপনার গ্রুপে অ্যাড করুন", url=add_to_group_url))
 
+    # ইউজারদের সহজে বোঝানোর জন্য সুন্দর করে সাজানো গাইডলাইন মেসেজ
     welcome_text = (
         f"👋 **হ্যালো {message.from_user.first_name}!**\n\n"
-        "🛡️ এটি একটি উন্নত **টেলিগ্রাম গ্রুপ সিকিউরিটি বোট**।\n\n"
-        "⚠️ **বোটটি সচল করতে প্রথমে নিচে দেওয়া আমাদের ৩টি অফিশিয়াল চ্যানেলে জয়েন করুন,** "
-        "তারপর নিচে থাকা **'জয়েন করেছি'** বাটনে ক্লিক করুন।"
+        f"🛡️ এটি একটি অত্যন্ত উন্নত **টেলিগ্রাম গ্রুপ সিকিউরিটি বোট**। এটি আপনার গ্রুপকে স্প্যামার এবং চোরদের হাত থেকে ১০০% সুরক্ষিত রাখবে।\n\n"
+        f"🤖 **এই বোটটি কী কী করতে পারে?**\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🚫 **কপি-পেস্ট অ্যান্টি-ব্যান:** অন্য কারও টেক্সট হুবহু কপি করে গ্রুপে পেস্ট করলেই স্প্যামার সরাসরি ব্যান হবে! (তবে হাই, হ্যালো এর মতো ছোট শব্দ সুরক্ষিত)।\n"
+        f"🔗 **লিংক ও ইউজারনেম কিলার:** গ্রুপে কোনো প্রকার লিংক (`http`, `t.me`) বা `@username` শেয়ার করা মাত্রই অটো-ডিলিট হবে।\n"
+        f"🔄 **স্মার্ট ফরওয়ার্ড ব্লক:** যেকোনো পাবলিক চ্যানেল থেকে পোস্ট ফরওয়ার্ড করলে ডিলিট হবে (প্রাইভেট মেসেজ ফরওয়ার্ড সেফ থাকবে)।\n"
+        f"📢 **ফোর্স জয়েন লক:** অফিশিয়াল চ্যানেলে জয়েন না করে গ্রুপে কেউ মেসেজ দিতে পারবে না।\n\n"
+        f"⚙️ **বোটটি চালু করার নিয়ম (Setup Guide):**\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"১. প্রথমে নিচে দেওয়া আমাদের অফিশিয়াল চ্যানেলগুলোতে জয়েন করুন।\n"
+        f"২. জয়েন শেষে **'✅ জয়েন করেছি (Verify)'** বাটনে ক্লিক করুন।\n"
+        f"৩. এরপর **'➕ বোটটি আপনার গ্রুপে অ্যাড করুন'** বাটনে ক্লিক করে গ্রুপে নিয়ে যান এবং বোটটিকে অবশ্যই **Admin** বানিয়ে সব পারমিশন দিয়ে দিন।\n\n"
+        f"⚠️ *চ্যানেলগুলোতে জয়েন না করলে ভেরিফিকেশন সফল হবে না।* "
     )
     await message.reply(welcome_text, reply_markup=keyboard, parse_mode="Markdown")
 
-# ---- ৩. জয়েন ভেরিফিকেশন ----
 @dp.callback_query_handler(text="verify_user")
 async def verify_user_callback(call: types.CallbackQuery):
     not_joined = await check_user_joined(call.from_user.id)
@@ -133,7 +158,6 @@ async def verify_user_callback(call: types.CallbackQuery):
         await call.answer("⚠️ আপনি এখনও সবগুলো চ্যানেলে জয়েন করেননি! দয়া করে সবগুলোতে জয়েন করুন।", show_alert=True)
     else:
         await call.answer("✅ ভেরিফিকেশন সফল হয়েছে!", show_alert=True)
-        
         bot_user = await bot.get_me()
         success_keyboard = InlineKeyboardMarkup(row_width=1)
         add_to_group_url = f"https://t.me/{bot_user.username}?startgroup=true"
@@ -141,7 +165,7 @@ async def verify_user_callback(call: types.CallbackQuery):
         
         await call.message.edit_text(
             "🎉 **অভিনন্দন! আপনার ভেরিফিকেশন সফল হয়েছে।**\n\n"
-            "এই সিকিউরিটি বোটটি এখন আপনার নিজের গ্রুপের জন্য প্রস্তুত। "
+            "এই সিকিউরিটি বোটটি এখন আপনার নিজের গ্রুপের জন্য প্রস্তুত।\n"
             "নিচে দেওয়া ইনলাইন বাটনে ক্লিক করে বোটটি এখনই আপনার গ্রুপে অ্যাড করে নিন এবং গ্রুপের সিকিউরিটি ১০০% মজবুত করুন!\n\n"
             "*(নোট: গ্রুপে অ্যাড করার পর বোটটিকে অবশ্যই Admin বানিয়ে অল পারমিশন দিয়ে দেবেন।)*",
             reply_markup=success_keyboard,
@@ -161,7 +185,6 @@ async def broadcast_message(message: types.Message):
 
     cursor.execute("SELECT user_id FROM bot_users")
     users = cursor.fetchall()
-    
     status_msg = await message.reply(f"⏳ {len(users)} জন ইউজারের কাছে মেসেজ পাঠানো শুরু হচ্ছে...")
     success_count = 0
     fail_count = 0
@@ -186,17 +209,16 @@ async def secure_group(message: types.Message):
     if message.chat.type == 'private':
         return
 
-    # কমান্ড বা বোটের নিজস্ব মেসেজ ফিল্টার করা (যাতে এগুলো কপি-পেস্ট ডাটাবেজে না যায়)
     if message.text and (message.text.startswith('/') or message.from_user.is_bot):
         return
 
     if await is_admin(message.chat.id, message.from_user.id):
-        if message.text:
+        if message.text and len(message.text.strip()) > 4:
             cursor.execute("INSERT OR IGNORE INTO msg_history VALUES (?)", (get_hash(message.text),))
             conn.commit()
         return
 
-    # ফোর্স জয়েন চেক
+    # ১. ফোর্স জয়েন চেক
     not_joined = await check_user_joined(message.from_user.id)
     if not_joined:
         try:
@@ -204,32 +226,44 @@ async def secure_group(message: types.Message):
             keyboard = InlineKeyboardMarkup(row_width=1)
             for ch in not_joined:
                 keyboard.add(InlineKeyboardButton(text=ch["title"], url=ch["link"]))
-            await message.answer(f"⚠️ @{message.from_user.username}, গ্রুপে মেসেজ দিতে আমাদের অফিশিয়াল চ্যানেলগুলোতে জয়েন করুন!", reply_markup=keyboard)
+            
+            await message.answer(
+                f"⚠️ @{message.from_user.username}, আপনি আমাদের অফিশিয়াল চ্যানেলগুলোতে জয়েন করেননি!\n"
+                f"গ্রুপে মেসেজ দেওয়ার অধিকার পেতে নিচের চ্যানেলগুলোতে জয়েন করুন।", 
+                reply_markup=keyboard
+            )
         except Exception:
             pass
         return
 
-    # ফরওয়ার্ড ফিল্টার
+    # ২. স্মার্ট ফরওয়ার্ড ফিল্টার
     if message.forward_from_chat:
         if message.forward_from_chat.username:
             try:
                 await message.delete()
                 await message.answer(f"❌ @{message.from_user.username}, পাবলিক চ্যানেল বা গ্রুপ থেকে পোস্ট ফরওয়ার্ড করা নিষেধ!")
+                return
             except Exception:
                 pass
-            return
+    elif message.forward_from:
+        pass
 
-    # লিংক ও ইউজারনেম ফিল্টার
+    # ৩. লিংক ও ইউজারনেম ফিল্টার
     if message.text:
-        if "t.me/" in message.text or "@" in message.text:
+        if "t.me/" in message.text or "http" in message.text or "@" in message.text:
             try:
                 await message.delete()
+                await message.answer(f"❌ @{message.from_user.username}, গ্রুপে কোনো লিংক বা ইউজারনেম শেয়ার করা সম্পূর্ণ নিষেধ!")
+                return
             except Exception:
                 pass
+
+        # ৪. কপি-পেস্ট ফিল্টার
+        clean_text = message.text.strip()
+        if len(clean_text) <= 4:
             return
 
-        # কপি-পেস্ট অ্যান্ড ব্যান সেটিং
-        text_hash = get_hash(message.text)
+        text_hash = get_hash(clean_text)
         cursor.execute("SELECT hash FROM msg_history WHERE hash=?", (text_hash,))
         
         if cursor.fetchone():
@@ -238,15 +272,15 @@ async def secure_group(message: types.Message):
                 await bot.kick_chat_member(chat_id=message.chat.id, user_id=message.from_user.id)
                 
                 warning_text = (
-                    f"🚨 **কপি-পেস্ট অ্যালার্ট ও ব্যান নোটিশ!** 🚨\n\n"
+                    f"🚨 **কপি-পেস্ট নোটিশ ও ব্যান নোটিশ!** 🚨\n\n"
                     f"👤 **ইউজার:** @{message.from_user.username}\n"
                     f"🆔 **আইডি:** `{message.from_user.id}`\n\n"
-                    f"❌ **অপরাধ:** এই গ্রুপে থাকা অন্য কোনো ইউজারের আসল/প্রথম পোস্টটি হুবহু কপি করে পেস্ট করার চেষ্টা করা হয়েছে।\n\n"
+                    f"❌ **অপরাধ:** এই গ্রুপে থাকা অন্য কোনো ইউজারের আসল পোস্ট হুবহু কপি করে পেস্ট করার চেষ্টা করা হয়েছে।\n\n"
                     f"📢 **অ্যাকশন:** গ্রুপের নিয়ম ভঙ্গ করায় ইউজারকে গ্রুপ থেকে **ব্যান (Ban)** করা হলো!"
                 )
                 await message.answer(warning_text, parse_mode="Markdown")
             except Exception as e:
-                print(f"ব্যান বা মেসেজ ডিলিট করতে সমস্যা হয়েছে: {e}")
+                print(f"ব্যান করতে সমস্যা: {e}")
         else:
             cursor.execute("INSERT OR IGNORE INTO msg_history VALUES (?)", (text_hash,))
             conn.commit()
