@@ -74,6 +74,7 @@ async def admin_panel(message: types.Message):
     if message.from_user.id != MAIN_ADMIN_ID: return
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton("🗑️ হিস্ট্রি ক্লিয়ার", callback_data="admin_clear"))
+    kb.add(InlineKeyboardButton("📢 ব্রডকাস্ট মেসেজ", callback_data="admin_broadcast"))
     await message.reply("👑 অ্যাডমিন প্যানেল", reply_markup=kb)
 
 @dp.callback_query_handler(text="admin_clear")
