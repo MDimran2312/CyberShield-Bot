@@ -5,6 +5,23 @@ import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+# ১. ল্যাঙ্গুয়েজ সেটিংস
+LANG_TEXT = {
+        'bn': {
+        'verify_alert': "⚠️ দুঃখিত!\n\nআপনি এখনো সবগুলোতে জয়েন করেননি। অনুগ্রহ করে সব চ্যানেলগুলোতে জয়েন করে আবার ট্রাই করুন।",
+        'success_text': "✅ <b>ভেরিফিকেশন সফল হয়েছে!</b>\n\nধন্যবাদ আমাদের চ্যানেলগুলোতে জয়েন করার জন্য। এখন নিচের বাটনটি ক্লিক করে বোটটিকে আপনার গ্রুপে যুক্ত করুন।",
+        'verify': '✅ জয়েন করেছি (Verify)',
+        'channels': 'আমাদের অফিসিয়াল চ্যানেলগুলোতে জয়েন করুন:',  # <--- এখানে কমা যোগ করো
+        'welcome_msg': "✨ <b>স্বাগতম!</b>\n\nএই গ্রুপে লিংক বা ইউজারনেম শেয়ার করা সম্পূর্ণ নিষিদ্ধ। অনুগ্রহ করে নিয়ম মেনে চলুন।"
+    },
+    'en': {
+        'verify_alert': "⚠️ Oops!\n\nYou haven't joined all channels yet. Please join all channels and try again.",
+        'success_text': "✅ <b>Verification Successful!</b>\n\nThank you for joining our channels. Now click the button below to add the bot to your group.",
+        'verify': '✅ I have joined',
+        'channels': 'Please join our official channels:',  # <--- এখানে কমা যোগ করো
+        'welcome_msg': "✨ <b>Welcome!</b>\n\nSharing links or usernames in this group is strictly prohibited. Please follow the rules."
+    }
+} #
 
 # ---- ⚙️ বোট কনফিগারেশন ----
 API_TOKEN = '8709224461:AAEiDd1tQ20ql0teegS0WTR_MWeJymNJDDQ'  # এখানে আপনার আসল বোট টোকেনটি বসান
@@ -24,8 +41,12 @@ OFFICIAL_CHANNELS = [
 DB_PATH = os.path.join(os.path.dirname(__file__), 'group_security.db')
 conn = sqlite3.connect(DB_PATH, timeout=20)
 cursor = conn.cursor()
+
+# টেবিলগুলো তৈরি করার সঠিক সিকোয়েন্স
 cursor.execute('''CREATE TABLE IF NOT EXISTS msg_history (hash TEXT PRIMARY KEY)''')
 cursor.execute('''CREATE TABLE IF NOT EXISTS bot_users (user_id INTEGER PRIMARY KEY)''')
+cursor.execute('''CREATE TABLE IF NOT EXISTS user_lang (chat_id INTEGER PRIMARY KEY, lang TEXT)''')
+
 conn.commit()
 
 def get_hash(text):
@@ -76,16 +97,55 @@ async def bot_admin_check(update: types.ChatMemberUpdated):
 async def admin_panel(message: types.Message):
     if message.from_user.id != MAIN_ADMIN_ID:
         return
+      
+# ---- ল্যাঙ্গুয়েজ সিলেকশন ও চ্যানেল শো করার লজিক (আপডেট করা) ----
+@dp.callback_query_handler(lambda call: call.data.startswith("set_lang_"))
+async def set_language(call: types.CallbackQuery):
+    lang = call.data.split("_")[2]
+    cursor.execute("INSERT OR REPLACE INTO user_lang VALUES (?, ?)", (call.from_user.id, lang))
+    conn.commit()
+    
+    # ইনলাইন বাটন তৈরি
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    
+    # চ্যানেল বাটনগুলো যোগ করা
+    for ch in OFFICIAL_CHANNELS:
+        keyboard.add(InlineKeyboardButton(text=ch["title"], url=ch["link"]))
+    
+    # ভেরিফাই বাটন যোগ করা
+    verify_btn = InlineKeyboardButton(text=LANG_TEXT[lang]['verify'], callback_data="verify_user")
+    keyboard.add(verify_btn)
+    
+    # মেসেজ এডিট করা (নিরাপত্তার জন্য try-except)
+    try:
+        await call.message.edit_text(text=LANG_TEXT[lang]['channels'], reply_markup=keyboard)
+    except Exception as e:
+        print(f"Error updating message: {e}")
 
-    cursor.execute("SELECT COUNT(*) FROM bot_users")
-    total_users = cursor.fetchone()[0]
-
-    admin_keyboard = InlineKeyboardMarkup(row_width=1)
-    admin_keyboard.add(
-        InlineKeyboardButton(text="📊 বোটের তথ্য (Stats)", callback_data="admin_stats"),
-        InlineKeyboardButton(text="🗑️ কপি-পেস্ট ডাটা ক্লিয়ার করুন", callback_data="clear_history"),
-        InlineKeyboardButton(text="📢 ব্রডকাস্ট মেসেজ পাঠান", callback_data="admin_broadcast_info")
-    )
+# ---- ভেরিফিকেশন ও গ্রুপে অ্যাড করার লজিক (আপডেট করা) ----
+async def verify_user_callback(call: types.CallbackQuery):
+    not_joined = await check_user_joined(call.from_user.id)
+    
+    if not_joined:
+        await call.answer("⚠️ দয়া করে সব চ্যানেলে জয়েন করুন!", show_alert=True)
+    else:
+        bot_user = await bot.get_me()
+        
+        # গ্রুপে অ্যাডমিন করার লিংক
+        add_to_group_url = f"https://t.me/{bot_user.username}?startgroup=true&admin=change_info+delete_messages+restrict_members+invite_users+pin_messages+manage_video_chats"
+        
+        # সাকসেস বাটন
+        success_keyboard = InlineKeyboardMarkup()
+        success_keyboard.add(InlineKeyboardButton(text="➕ বোটটি সরাসরি আপনার গ্রুপে অ্যাডমিন করুন", url=add_to_group_url))
+        
+        # ফাইনাল মেসেজ এডিট করা
+        try:
+            await call.message.edit_text(
+                text="✅ ভেরিফিকেশন সফল হয়েছে!\n\nএখন নিচের বাটনটি ক্লিক করে বোটটি আপনার গ্রুপে যুক্ত করুন। এটি স্বয়ংক্রিয়ভাবে সব পারমিশন নিয়ে অ্যাডমিন হয়ে যাবে।", 
+                reply_markup=success_keyboard
+            )
+        except Exception as e:
+            print(f"Error updating success message: {e}")
 
     await message.reply(
         f"👑 **স্বাগতম, মেইন অ্যাডমিন ইমরান!**\n\n"
