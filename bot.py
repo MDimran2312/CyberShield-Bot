@@ -147,39 +147,60 @@ async def verify_user_callback(call: types.CallbackQuery):
 # ---- সিকিউরিটি ইঞ্জিন ----
 @dp.message_handler(content_types=types.ContentType.ANY)
 async def secure_group(message: types.Message):
+    # ১. এডমিন ও বোটের জন্য সুরক্ষা (এডমিনদের কোনো বিধিনিষেধ নেই)
     if message.chat.type == 'private' or message.from_user.is_bot: return
     member = await bot.get_chat_member(message.chat.id, message.from_user.id)
     if member.status in ['administrator', 'creator']: return
 
     lang = get_user_lang(message.from_user.id)
-    if await check_user_joined(message.from_user.id): await message.delete(); return
-    if message.forward_from_chat or message.forward_from or any(x in str(message.text).lower() for x in ["http", "t.me/", "@"]):
+    
+    # ২. ফোর্স জয়েন চেক (চ্যানেলে জয়েন না থাকলে মেসেজ ডিলিট)
+    if await check_user_joined(message.from_user.id):
         await message.delete(); return
 
+    # ৩. লিংক ও ইউজারনেম কিলার (লিংক বা @username দিলে ওয়ার্নিং দিবে, ব্যান করবে না)
+    if message.text and (any(x in str(message.text).lower() for x in ["http", "t.me/", "www.", ".com"]) or "@" in message.text):
+        await message.delete()
+        await message.answer(LANG_TEXT[lang]['link_warn'].format(name=message.from_user.first_name))
+        return
+
+    # ৪. কপি-পেস্ট ও ওয়ার্নিং সিস্টেম (২ বার ওয়ার্নিং, ৩য় বারে অটো ব্যান)
     if message.text:
         text_hash = hashlib.md5(message.text.strip().encode('utf-8')).hexdigest()
         cursor.execute("SELECT user_id FROM msg_history WHERE hash=?", (text_hash,))
         row = cursor.fetchone()
+        
+        # যদি অন্য কারো মেসেজ কপি করা হয়
         if row and row[0] != message.from_user.id:
+            await message.delete() # কপি করা মেসেজ ডিলিট
+            
             cursor.execute("SELECT count FROM user_warnings WHERE user_id=?", (message.from_user.id,))
             warn = cursor.fetchone()
             warn_count = (warn[0] + 1) if warn else 1
-            await message.delete()
+            
+            # ৩য় বার নিয়ম ভাঙলে ব্যান
             if warn_count >= 3:
                 await bot.kick_chat_member(message.chat.id, message.from_user.id)
                 await message.answer(LANG_TEXT[lang]['banned'].format(name=message.from_user.first_name))
                 cursor.execute("DELETE FROM user_warnings WHERE user_id=?", (message.from_user.id,))
             else:
+                # ওয়ার্নিং নোটিশ
                 await message.answer(LANG_TEXT[lang]['warning'].format(name=message.from_user.first_name, count=warn_count))
                 cursor.execute("INSERT OR REPLACE INTO user_warnings VALUES (?, ?)", (message.from_user.id, warn_count))
+            
             conn.commit(); return
+        
+        # ইউনিক মেসেজ হিসেবে সেভ করুন
         cursor.execute("INSERT INTO msg_history VALUES (?, ?)", (text_hash, message.from_user.id))
+        
+        # ৫. ২৪ ঘণ্টায় ৮টি মেসেজ লিমিট
         limit_time = (datetime.now() - timedelta(hours=24)).isoformat()
         cursor.execute("SELECT COUNT(*) FROM user_msg_track WHERE user_id=? AND timestamp > ?", (message.from_user.id, limit_time))
         if cursor.fetchone()[0] >= 8:
             await message.delete()
             await message.answer(LANG_TEXT[lang]['limit'].format(name=message.from_user.first_name))
             return
+        
         cursor.execute("INSERT INTO user_msg_track VALUES (?, ?)", (message.from_user.id, datetime.now().isoformat()))
         conn.commit()
 
