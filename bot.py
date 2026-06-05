@@ -145,64 +145,78 @@ async def verify_user_callback(call: types.CallbackQuery):
         await call.message.edit_text(LANG_TEXT[lang]['success'], reply_markup=kb, parse_mode="HTML")
 
 # ---- সিকিউরিটি ইঞ্জিন ----
-@dp.message_handler(content_types=types.ContentType.ANY)
-async def secure_group(message: types.Message):
-    # ১. এডমিন ও বোটের জন্য সুরক্ষা (এডমিনদের কোনো বিধিনিষেধ নেই)
-    if message.chat.type == 'private' or message.from_user.is_bot: return
-    member = await bot.get_chat_member(message.chat.id, message.from_user.id)
-    if member.status in ['administrator', 'creator']: return
-
-    lang = get_user_lang(message.from_user.id)
-    
-    # ২. ফোর্স জয়েন চেক (চ্যানেলে জয়েন না থাকলে মেসেজ ডিলিট)
-    if await check_user_joined(message.from_user.id):
-        await message.delete(); return
-
-    # ৩. লিংক ও ইউজারনেম কিলার (লিংক বা @username দিলে ওয়ার্নিং দিবে, ব্যান করবে না)
-    if message.text and (any(x in str(message.text).lower() for x in ["http", "t.me/", "www.", ".com"]) or "@" in message.text):
-        await message.delete()
-        await message.answer(LANG_TEXT[lang]['link_warn'].format(name=message.from_user.first_name))
+if await is_admin(message.chat.id, message.from_user.id):
+        if message.text and len(message.text.strip()) > 4:
+            cursor.execute("INSERT OR IGNORE INTO msg_history VALUES (?)", (get_hash(message.text),))
+            conn.commit()
         return
 
-    # ৪. কপি-পেস্ট ও ওয়ার্নিং সিস্টেম (২ বার ওয়ার্নিং, ৩য় বারে অটো ব্যান)
-    if message.text:
-        text_hash = hashlib.md5(message.text.strip().encode('utf-8')).hexdigest()
-        cursor.execute("SELECT user_id FROM msg_history WHERE hash=?", (text_hash,))
-        row = cursor.fetchone()
-        
-        # যদি অন্য কারো মেসেজ কপি করা হয়
-        if row and row[0] != message.from_user.id:
-            await message.delete() # কপি করা মেসেজ ডিলিট
-            
-            cursor.execute("SELECT count FROM user_warnings WHERE user_id=?", (message.from_user.id,))
-            warn = cursor.fetchone()
-            warn_count = (warn[0] + 1) if warn else 1
-            
-            # ৩য় বার নিয়ম ভাঙলে ব্যান
-            if warn_count >= 3:
-                await bot.kick_chat_member(message.chat.id, message.from_user.id)
-                await message.answer(LANG_TEXT[lang]['banned'].format(name=message.from_user.first_name))
-                cursor.execute("DELETE FROM user_warnings WHERE user_id=?", (message.from_user.id,))
-            else:
-                # ওয়ার্নিং নোটিশ
-                await message.answer(LANG_TEXT[lang]['warning'].format(name=message.from_user.first_name, count=warn_count))
-                cursor.execute("INSERT OR REPLACE INTO user_warnings VALUES (?, ?)", (message.from_user.id, warn_count))
-            
-            conn.commit(); return
-        
-        # ইউনিক মেসেজ হিসেবে সেভ করুন
-        cursor.execute("INSERT INTO msg_history VALUES (?, ?)", (text_hash, message.from_user.id))
-        
-        # ৫. ২৪ ঘণ্টায় ৮টি মেসেজ লিমিট
-        limit_time = (datetime.now() - timedelta(hours=24)).isoformat()
-        cursor.execute("SELECT COUNT(*) FROM user_msg_track WHERE user_id=? AND timestamp > ?", (message.from_user.id, limit_time))
-        if cursor.fetchone()[0] >= 8:
+    # ১. ফোর্স জয়েন চেক
+    not_joined = await check_user_joined(message.from_user.id)
+    if not_joined:
+        try:
             await message.delete()
-            await message.answer(LANG_TEXT[lang]['limit'].format(name=message.from_user.first_name))
+            keyboard = InlineKeyboardMarkup(row_width=1)
+            for ch in not_joined:
+                keyboard.add(InlineKeyboardButton(text=ch["title"], url=ch["link"]))
+            
+            await message.answer(
+                f"⚠️ @{message.from_user.username}, আপনি আমাদের অফিশিয়াল চ্যানেলগুলোতে জয়েন করেননি!\n"
+                f"গ্রুপে মেসেজ দেওয়ার অধিকার পেতে নিচের চ্যানেলগুলোতে জয়েন করুন।", 
+                reply_markup=keyboard
+            )
+        except Exception:
+            pass
+        return
+
+    # ২. স্মার্ট ফরওয়ার্ড ফিল্টার
+    if message.forward_from_chat:
+        if message.forward_from_chat.username:
+            try:
+                await message.delete()
+                await message.answer(f"❌ @{message.from_user.username}, পাবলিক চ্যানেল বা গ্রুপ থেকে পোস্ট ফরওয়ার্ড করা নিষেধ!")
+                return
+            except Exception:
+                pass
+    elif message.forward_from:
+        pass
+
+    # ৩. লিংক ও ইউজারনেম ফিল্টার
+    if message.text:
+        if "t.me/" in message.text or "http" in message.text or "@" in message.text:
+            try:
+                await message.delete()
+                await message.answer(f"❌ @{message.from_user.username}, গ্রুপে কোনো লিংক বা ইউজারনেম শেয়ার করা সম্পূর্ণ নিষেধ!")
+                return
+            except Exception:
+                pass
+
+        # ৪. কপি-পেস্ট ফিল্টার
+        clean_text = message.text.strip()
+        if len(clean_text) <= 4:
             return
+
+        text_hash = get_hash(clean_text)
+        cursor.execute("SELECT hash FROM msg_history WHERE hash=?", (text_hash,))
         
-        cursor.execute("INSERT INTO user_msg_track VALUES (?, ?)", (message.from_user.id, datetime.now().isoformat()))
-        conn.commit()
+        if cursor.fetchone():
+            try:
+                await message.delete()
+                await bot.kick_chat_member(chat_id=message.chat.id, user_id=message.from_user.id)
+                
+                warning_text = (
+                    f"🚨 **কপি-পেস্ট নোটিশ ও ব্যান নোটিশ!** 🚨\n\n"
+                    f"👤 **ইউজার:** @{message.from_user.username}\n"
+                    f"🆔 **আইডি:** `{message.from_user.id}`\n\n"
+                    f"❌ **অপরাধ:** এই গ্রুপে থাকা অন্য কোনো ইউজারের আসল পোস্ট হুবহু কপি করে পেস্ট করার চেষ্টা করা হয়েছে।\n\n"
+                    f"📢 **অ্যাকশন:** গ্রুপের নিয়ম ভঙ্গ করায় ইউজারকে গ্রুপ থেকে **ব্যান (Ban)** করা হলো!"
+                )
+                await message.answer(warning_text, parse_mode="Markdown")
+            except Exception as e:
+                print(f"ব্যান করতে সমস্যা: {e}")
+        else:
+            cursor.execute("INSERT OR IGNORE INTO msg_history VALUES (?)", (text_hash,))
+            conn.commit()
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
