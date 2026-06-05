@@ -6,6 +6,9 @@ from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
 
 # ---- ১. ল্যাঙ্গুয়েজ ও চ্যানেল কনফিগারেশন ----
 CHANNELS = {
@@ -42,8 +45,13 @@ LANG_TEXT = {
 
 API_TOKEN = '8709224461:AAEiDd1tQ20ql0teegS0WTR_MWeJymNJDDQ'
 MAIN_ADMIN_ID = 8273597769
+
+class BroadcastState(StatesGroup):
+    waiting_for_message = State()
+
+storage = MemoryStorage()
 bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher(bot, storage=storage)
 
 # ---- ডাটাবেজ সেটআপ ----
 DB_PATH = os.path.join(os.path.dirname(__file__), 'group_security.db')
@@ -73,17 +81,40 @@ async def check_user_joined(user_id):
 async def admin_panel(message: types.Message):
     if message.from_user.id != MAIN_ADMIN_ID: return
     kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(InlineKeyboardButton("🗑️ হিস্ট্রি ক্লিয়ার", callback_data="admin_clear"))
-    kb.add(InlineKeyboardButton("📢 ব্রডকাস্ট মেসেজ", callback_data="admin_broadcast"))
+    kb.add(InlineKeyboardButton("📊 মোট ইউজার", callback_data="admin_stats"),
+           InlineKeyboardButton("🗑️ হিস্ট্রি ক্লিয়ার", callback_data="admin_clear"),
+           InlineKeyboardButton("📢 ব্রডকাস্ট মেসেজ", callback_data="admin_broadcast"))
     await message.reply("👑 অ্যাডমিন প্যানেল", reply_markup=kb)
 
-@dp.callback_query_handler(text="admin_clear")
-async def clear_history(call: types.CallbackQuery):
-    cursor.execute("DELETE FROM msg_history")
-    conn.commit()
-    await call.answer("হিস্ট্রি ক্লিয়ার করা হয়েছে!", show_alert=True)
+@dp.callback_query_handler(lambda call: call.data.startswith("admin_"))
+async def admin_callback(call: types.CallbackQuery):
+    if call.data == "admin_clear":
+        cursor.execute("DELETE FROM msg_history")
+        conn.commit()
+        await call.answer("হিস্ট্রি ক্লিয়ার করা হয়েছে!", show_alert=True)
+    elif call.data == "admin_stats":
+        cursor.execute("SELECT COUNT(*) FROM user_lang")
+        count = cursor.fetchone()[0]
+        await call.answer(f"মোট ইউজার: {count}", show_alert=True)
+    elif call.data == "admin_broadcast":
+        await call.message.answer("📢 ব্রডকাস্ট মেসেজটি লিখুন:")
+        await BroadcastState.waiting_for_message.set()
 
-# ---- স্টার্ট ও ল্যাঙ্গুয়েজ লজিক ----
+@dp.message_handler(state=BroadcastState.waiting_for_message)
+async def process_broadcast(message: types.Message, state: FSMContext):
+    cursor.execute("SELECT user_id FROM user_lang")
+    users = cursor.fetchall()
+    count = 0
+    for u in users:
+        try:
+            await bot.send_message(u[0], message.text, parse_mode="HTML")
+            count += 1
+            await asyncio.sleep(0.1)
+        except: continue
+    await message.reply(f"✅ {count} জনকে মেসেজ পাঠানো হয়েছে।")
+    await state.finish()
+
+# ---- স্টার্ট ও ল্যাঙ্গুয়েজ ----
 @dp.message_handler(commands=['start'])
 async def start_command(message: types.Message):
     kb = InlineKeyboardMarkup(row_width=1)
@@ -121,28 +152,19 @@ async def secure_group(message: types.Message):
     if member.status in ['administrator', 'creator']: return
 
     lang = get_user_lang(message.from_user.id)
-    
-    # ১. ফোর্স জয়েন চেক
-    if await check_user_joined(message.from_user.id):
-        await message.delete(); return
-
-    # ২. ফরওয়ার্ড ও লিংক চেক
+    if await check_user_joined(message.from_user.id): await message.delete(); return
     if message.forward_from_chat or message.forward_from or any(x in str(message.text).lower() for x in ["http", "t.me/", "@"]):
         await message.delete(); return
 
-    # ৩. কপি-পেস্ট ও ওয়ার্নিং সিস্টেম
     if message.text:
         text_hash = hashlib.md5(message.text.strip().encode('utf-8')).hexdigest()
         cursor.execute("SELECT user_id FROM msg_history WHERE hash=?", (text_hash,))
         row = cursor.fetchone()
-        
         if row and row[0] != message.from_user.id:
             cursor.execute("SELECT count FROM user_warnings WHERE user_id=?", (message.from_user.id,))
             warn = cursor.fetchone()
             warn_count = (warn[0] + 1) if warn else 1
-            
-            await message.delete() # মেসেজ ডিলিট
-            
+            await message.delete()
             if warn_count >= 3:
                 await bot.kick_chat_member(message.chat.id, message.from_user.id)
                 await message.answer(LANG_TEXT[lang]['banned'].format(name=message.from_user.first_name))
@@ -151,18 +173,14 @@ async def secure_group(message: types.Message):
                 await message.answer(LANG_TEXT[lang]['warning'].format(name=message.from_user.first_name, count=warn_count))
                 cursor.execute("INSERT OR REPLACE INTO user_warnings VALUES (?, ?)", (message.from_user.id, warn_count))
             conn.commit(); return
-        
         cursor.execute("INSERT INTO msg_history VALUES (?, ?)", (text_hash, message.from_user.id))
-        
-        # ৪. মেসেজ লিমিট
-        now = datetime.now().isoformat()
         limit_time = (datetime.now() - timedelta(hours=24)).isoformat()
         cursor.execute("SELECT COUNT(*) FROM user_msg_track WHERE user_id=? AND timestamp > ?", (message.from_user.id, limit_time))
         if cursor.fetchone()[0] >= 8:
             await message.delete()
             await message.answer(LANG_TEXT[lang]['limit'].format(name=message.from_user.first_name))
             return
-        cursor.execute("INSERT INTO user_msg_track VALUES (?, ?)", (message.from_user.id, now))
+        cursor.execute("INSERT INTO user_msg_track VALUES (?, ?)", (message.from_user.id, datetime.now().isoformat()))
         conn.commit()
 
 if __name__ == '__main__':
