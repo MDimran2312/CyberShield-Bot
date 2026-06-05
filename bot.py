@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ---- ১. ডায়নামিক ল্যাঙ্গুয়েজ ও চ্যানেল কনফিগারেশন ----
+# ---- ১. ল্যাঙ্গুয়েজ ও চ্যানেল কনফিগারেশন ----
 CHANNELS = {
     'bn': [
         {"id": "-1003273901336", "title": "📢 অফিশিয়াল চ্যানেল ১", "link": "https://t.me/fegasus_1"},
@@ -41,6 +41,7 @@ LANG_TEXT = {
 }
 
 API_TOKEN = '8709224461:AAEiDd1tQ20ql0teegS0WTR_MWeJymNJDDQ'
+MAIN_ADMIN_ID = 8273597769
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
@@ -67,7 +68,21 @@ async def check_user_joined(user_id):
         except: return True
     return False
 
-# ---- লজিক ----
+# ---- অ্যাডমিন প্যানেল ----
+@dp.message_handler(commands=['admin'])
+async def admin_panel(message: types.Message):
+    if message.from_user.id != MAIN_ADMIN_ID: return
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("🗑️ হিস্ট্রি ক্লিয়ার", callback_data="admin_clear"))
+    await message.reply("👑 অ্যাডমিন প্যানেল", reply_markup=kb)
+
+@dp.callback_query_handler(text="admin_clear")
+async def clear_history(call: types.CallbackQuery):
+    cursor.execute("DELETE FROM msg_history")
+    conn.commit()
+    await call.answer("হিস্ট্রি ক্লিয়ার করা হয়েছে!", show_alert=True)
+
+# ---- স্টার্ট ও ল্যাঙ্গুয়েজ লজিক ----
 @dp.message_handler(commands=['start'])
 async def start_command(message: types.Message):
     kb = InlineKeyboardMarkup(row_width=1)
@@ -114,16 +129,19 @@ async def secure_group(message: types.Message):
     if message.forward_from_chat or message.forward_from or any(x in str(message.text).lower() for x in ["http", "t.me/", "@"]):
         await message.delete(); return
 
-    # ৩. কপি-পেস্ট ও ওয়ার্নিং
+    # ৩. কপি-পেস্ট ও ওয়ার্নিং সিস্টেম
     if message.text:
         text_hash = hashlib.md5(message.text.strip().encode('utf-8')).hexdigest()
         cursor.execute("SELECT user_id FROM msg_history WHERE hash=?", (text_hash,))
         row = cursor.fetchone()
+        
         if row and row[0] != message.from_user.id:
             cursor.execute("SELECT count FROM user_warnings WHERE user_id=?", (message.from_user.id,))
             warn = cursor.fetchone()
             warn_count = (warn[0] + 1) if warn else 1
-            await message.delete()
+            
+            await message.delete() # মেসেজ ডিলিট
+            
             if warn_count >= 3:
                 await bot.kick_chat_member(message.chat.id, message.from_user.id)
                 await message.answer(LANG_TEXT[lang]['banned'].format(name=message.from_user.first_name))
